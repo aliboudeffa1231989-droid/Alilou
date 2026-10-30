@@ -1,4 +1,4 @@
-name: Compiler APK Android
+name: Compiler APK Universel
 
 on:
   push:
@@ -8,40 +8,74 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Recuperer les fichiers
+      - name: 1. Recuperer les fichiers
         uses: actions/checkout@v4
 
-      - name: Installer Java 17
+      - name: 2. Installer Java 17 et Node.js
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
 
-      - name: Decompresser et Compiler APK
+      - name: 3. Extraire et Fabriquer APK
         run: |
-          echo "Fichiers présents dans votre GitHub :"
+          echo "=== Contenu du dépôt ==="
           ls -la
+          
+          # Extraire le ZIP s'il y en a un
           ZIP_FILE=$(find . -maxdepth 2 -iname "*.zip" | head -n 1)
           if [ -n "$ZIP_FILE" ]; then
-            echo "Extraction du fichier : $ZIP_FILE"
-            unzip -o "$ZIP_FILE" -d app_extrait
+            echo "Extraction de : $ZIP_FILE"
+            unzip -o "$ZIP_FILE" -d projet_extrait
+            cd projet_extrait
           fi
-          GRADLEW_PATH=$(find . -name "gradlew" | head -n 1)
-          if [ -z "$GRADLEW_PATH" ]; then
-            echo "ERREUR : Aucun projet Android (gradlew) trouvé !"
-            exit 1
-          fi
-          PROJECT_DIR=$(dirname "$GRADLEW_PATH")
-          cd "$PROJECT_DIR"
-          chmod +x gradlew
-          ./gradlew assembleDebug
-          mkdir -p "$GITHUB_WORKSPACE/sortie_apk"
-          find . -name "*.apk" -exec cp {} "$GITHUB_WORKSPACE/sortie_apk/" \;
 
-      - name: Telecharger APK
+          # Cas 1 : C'est déjà un projet Android natif (gradlew présent)
+          GRADLEW_PATH=$(find . -name "gradlew" | head -n 1)
+          if [ -n "$GRADLEW_PATH" ]; then
+            echo "Projet Android natif détecté !"
+            cd "$(dirname "$GRADLEW_PATH")"
+            chmod +x gradlew
+            ./gradlew assembleDebug
+          else
+            # Cas 2 : C'est une application Web Google AI Studio (package.json ou index.html)
+            echo "Application Web AI Studio détectée -> Conversion automatique en APK Android..."
+            PKG_PATH=$(find . -name "package.json" | head -n 1)
+            if [ -n "$PKG_PATH" ]; then
+              cd "$(dirname "$PKG_PATH")"
+              npm install
+              npm run build || true
+            fi
+            
+            # Trouver le dossier de sortie web (dist ou build ou dossier courant)
+            WEB_DIR="dist"
+            if [ ! -d "dist" ]; then
+              if [ -d "build" ]; then WEB_DIR="build"; else WEB_DIR="."; fi
+            fi
+
+            # Créer une enveloppe Android native avec Capacitor
+            npm install @capacitor/core @capacitor/cli @capacitor/android
+            npx cap init "Releves Industrie" "com.industrie.releves" --web-dir="$WEB_DIR"
+            npx cap add android
+            npx cap sync
+            cd android
+            chmod +x gradlew
+            ./gradlew assembleDebug
+          fi
+
+          # Récupérer l'APK final
+          mkdir -p "$GITHUB_WORKSPACE/sortie_apk"
+          find "$GITHUB_WORKSPACE" -name "*.apk" -exec cp {} "$GITHUB_WORKSPACE/sortie_apk/" \;
+          ls -la "$GITHUB_WORKSPACE/sortie_apk/"
+
+      - name: 4. Telecharger APK
         uses: actions/upload-artifact@v4
         with:
           name: Application-Releves-APK
           path: sortie_apk/*.apk
+          
 
           
