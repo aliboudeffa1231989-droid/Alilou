@@ -1,4 +1,4 @@
-name: Compiler APK Direct
+name: Compiler APK 2026
 
 on:
   push:
@@ -6,33 +6,44 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: 1. Recuperer les fichiers
         uses: actions/checkout@v4
 
-      - name: 2. Installer Java 21 et Node 20
+      - name: 2. Installer Java 17 et Node 22
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
-          java-version: '21'
+          java-version: '17'
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
 
-      - name: 3. Fabriquer APK
+      - name: 3. Fabriquer APK et afficher les details
         run: |
+          exec > >(tee -a build_log.txt) 2>&1
+          set -x
+
+          echo "::notice title=Fichiers dans votre GitHub::$(ls -la | tr '\n' ' ')"
+
+          # Extraire le ZIP s'il existe
           ZIP_FILE=$(find . -maxdepth 2 -iname "*.zip" | head -n 1)
           if [ -n "$ZIP_FILE" ]; then
             unzip -o "$ZIP_FILE" -d projet_extrait
           fi
 
+          # Cas 1 : Projet Android natif (gradlew)
           GRADLEW_PATH=$(find . -name "gradlew" | head -n 1)
           if [ -n "$GRADLEW_PATH" ]; then
             cd "$(dirname "$GRADLEW_PATH")"
             chmod +x gradlew
-            ./gradlew assembleDebug --no-daemon
+            ./gradlew assembleDebug --no-daemon || {
+              echo "::error title=Erreur Gradle::$(tail -n 15 "$GITHUB_WORKSPACE/build_log.txt" | tr '\n' ' ')"
+              exit 1
+            }
           else
+            # Cas 2 : Projet Web AI Studio
             PKG_PATH=$(find . -name "package.json" -not -path "*/node_modules/*" | head -n 1)
             if [ -n "$PKG_PATH" ]; then
               cd "$(dirname "$PKG_PATH")"
@@ -45,26 +56,31 @@ jobs:
               npm init -y
             fi
 
-            WEB_DIR="dist"
-            if [ ! -d "dist" ]; then
-              if [ -d "build" ]; then
-                WEB_DIR="build"
-              else
-                mkdir -p dist
-                cp *.html *.js *.css dist/ 2>/dev/null || true
-                if [ ! -f "dist/index.html" ]; then
-                  echo "<html><body><h1>Releves Industrie</h1></body></html>" > dist/index.html
-                fi
-              fi
+            mkdir -p www_final
+            if [ -d "dist" ]; then
+              cp -r dist/* www_final/ 2>/dev/null || true
+            elif [ -d "build" ]; then
+              cp -r build/* www_final/ 2>/dev/null || true
+            else
+              cp *.html *.js *.css www_final/ 2>/dev/null || true
             fi
 
-            npm install @capacitor/core@6 @capacitor/cli@6 @capacitor/android@6 --legacy-peer-deps
-            echo '{"appId":"com.industrie.releves","appName":"Releves","webDir":"'"$WEB_DIR"'"}' > capacitor.config.json
+            if [ ! -f "www_final/index.html" ]; then
+              echo "<!DOCTYPE html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'></head><body><h2>Releves Industrie</h2></body></html>" > www_final/index.html
+            fi
+
+            # Capacitor 5 est 100% compatible avec Java 17 et Android SDK par defaut
+            npm install @capacitor/core@5 @capacitor/cli@5 @capacitor/android@5 --legacy-peer-deps
+            node -e 'const fs=require("fs"); fs.writeFileSync("capacitor.config.json", JSON.stringify({appId:"com.industrie.releves",appName:"Releves",webDir:"www_final"}));'
+            
             npx cap add android
             npx cap sync
             cd android
             chmod +x gradlew
-            ./gradlew assembleDebug --no-daemon
+            ./gradlew assembleDebug --no-daemon || {
+              echo "::error title=Erreur Compilation::$(tail -n 15 "$GITHUB_WORKSPACE/build_log.txt" | tr '\n' ' ')"
+              exit 1
+            }
           fi
 
           mkdir -p "$GITHUB_WORKSPACE/sortie_apk"
@@ -75,4 +91,3 @@ jobs:
         with:
           name: Application-Releves-APK
           path: sortie_apk/*.apk
-          
